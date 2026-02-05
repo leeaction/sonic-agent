@@ -403,6 +403,28 @@ public class AndroidWSServer implements IAndroidWSServer {
                         jsonCheck.put("pf", 1);
                         TransportWorker.send(jsonCheck);
                     }
+                    case "screenshot" -> {
+                        // 同步截图命令：直接获取当前屏幕截图并返回二进制数据
+                        if (androidStepHandler != null && androidStepHandler.getAndroidDriver() != null) {
+                            AndroidDeviceThreadPool.cachedThreadPool.execute(() -> {
+                                try {
+                                    byte[] screenshot = androidStepHandler.getAndroidDriver().screenshot();
+                                    BytesTool.sendByte(session, screenshot);
+                                } catch (Exception e) {
+                                    log.error("Screenshot failed: " + e.getMessage());
+                                    JSONObject result = new JSONObject();
+                                    result.put("msg", "screenshotError");
+                                    result.put("error", e.getMessage());
+                                    BytesTool.sendText(session, result.toJSONString());
+                                }
+                            });
+                        } else {
+                            JSONObject result = new JSONObject();
+                            result.put("msg", "screenshotError");
+                            result.put("error", "Driver not initialized");
+                            BytesTool.sendText(session, result.toJSONString());
+                        }
+                    }
                 }
             }
         }

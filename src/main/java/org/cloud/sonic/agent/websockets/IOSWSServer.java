@@ -486,6 +486,26 @@ public class IOSWSServer implements IIOSWSServer {
                             jsonCheck.put("pf", 2);
                             TransportWorker.send(jsonCheck);
                         }
+                        case "screenshot" -> {
+                            // 同步截图命令：直接获取当前屏幕截图并返回二进制数据
+                            if (iosDriver != null) {
+                                try {
+                                    byte[] screenshot = iosDriver.screenshot();
+                                    BytesTool.sendByte(session, screenshot);
+                                } catch (Exception e) {
+                                    log.error("Screenshot failed: " + e.getMessage());
+                                    JSONObject result = new JSONObject();
+                                    result.put("msg", "screenshotError");
+                                    result.put("error", e.getMessage());
+                                    sendText(session, result.toJSONString());
+                                }
+                            } else {
+                                JSONObject result = new JSONObject();
+                                result.put("msg", "screenshotError");
+                                result.put("error", "Driver not initialized");
+                                sendText(session, result.toJSONString());
+                            }
+                        }
                     }
                 }
             }
