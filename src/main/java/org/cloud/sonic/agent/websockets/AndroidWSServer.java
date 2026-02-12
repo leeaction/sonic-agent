@@ -117,15 +117,18 @@ public class AndroidWSServer implements IAndroidWSServer {
 
         saveUdIdMapAndSet(session, iDevice);
 
-        AndroidAPKMap.getMap().put(udId, false);
+        // 如果 Sonic APK 已在运行，不要重启（避免中断屏幕端等服务）
+        if (AndroidAPKMap.getMap().get(udId) == null || !AndroidAPKMap.getMap().get(udId)) {
+            AndroidAPKMap.getMap().put(udId, false);
 
-        if (!AndroidDeviceBridgeTool.installSonicApk(iDevice)) {
-            AndroidAPKMap.getMap().remove(udId);
-            return;
+            if (!AndroidDeviceBridgeTool.installSonicApk(iDevice)) {
+                AndroidAPKMap.getMap().remove(udId);
+                return;
+            }
+
+            AndroidDeviceBridgeTool.executeCommand(iDevice, "am start -n org.cloud.sonic.android/.SonicServiceActivity");
+            AndroidAPKMap.getMap().put(udId, true);
         }
-
-        AndroidDeviceBridgeTool.executeCommand(iDevice, "am start -n org.cloud.sonic.android/.SonicServiceActivity");
-        AndroidAPKMap.getMap().put(udId, true);
 
         AndroidTouchHandler.startTouch(iDevice);
 
@@ -407,15 +410,18 @@ public class AndroidWSServer implements IAndroidWSServer {
                         // 同步截图命令：直接获取当前屏幕截图并返回二进制数据
                         if (androidStepHandler != null && androidStepHandler.getAndroidDriver() != null) {
                             AndroidDeviceThreadPool.cachedThreadPool.execute(() -> {
-                                try {
-                                    byte[] screenshot = androidStepHandler.getAndroidDriver().screenshot();
-                                    BytesTool.sendByte(session, screenshot);
-                                } catch (Exception e) {
-                                    log.error("Screenshot failed: " + e.getMessage());
-                                    JSONObject result = new JSONObject();
-                                    result.put("msg", "screenshotError");
-                                    result.put("error", e.getMessage());
-                                    BytesTool.sendText(session, result.toJSONString());
+                                // 添加同步锁，防止并发截图导致线程安全问题
+                                synchronized (androidStepHandler.getAndroidDriver()) {
+                                    try {
+                                        byte[] screenshot = androidStepHandler.getAndroidDriver().screenshot();
+                                        BytesTool.sendByte(session, screenshot);
+                                    } catch (Exception e) {
+                                        log.error("Screenshot failed: " + e.getMessage());
+                                        JSONObject result = new JSONObject();
+                                        result.put("msg", "screenshotError");
+                                        result.put("error", e.getMessage());
+                                        BytesTool.sendText(session, result.toJSONString());
+                                    }
                                 }
                             });
                         } else {
