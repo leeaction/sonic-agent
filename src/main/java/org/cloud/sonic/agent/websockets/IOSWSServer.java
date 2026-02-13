@@ -197,6 +197,16 @@ public class IOSWSServer implements IIOSWSServer {
             switch (msg.getString("type")) {
                 case "startPerfmon" -> SibTool.startPerfmon(udId, msg.getString("bundleId"), session, null, 1000);
                 case "stopPerfmon" -> SibTool.stopPerfmon(udId);
+                case "stopWda" -> {
+                    // 强制停止 WDA（忽略引用计数）
+                    SibTool.forceStopWda(udId);
+                    // 清理 screenMap，这样下次连接会重新启动 WDA
+                    screenMap.remove(udId);
+                    JSONObject result = new JSONObject();
+                    result.put("msg", "stopWdaResult");
+                    result.put("status", "success");
+                    sendText(session, result.toJSONString());
+                }
                 case "forwardView" -> {
                     JSONObject forwardView = new JSONObject();
                     forwardView.put("msg", "forwardView");
@@ -533,6 +543,10 @@ public class IOSWSServer implements IIOSWSServer {
             SibTool.stopPerfmon(udId);
             SibTool.stopShare(udId);
             SGMTool.stopProxy(udId);
+            // 减少 WDA 引用计数，如果为0则停止 WDA
+            if (udId != null) {
+                SibTool.decrementWdaRef(udId);
+            }
             IOSDeviceLocalStatus.finish(session.getUserProperties().get("udId") + "");
             WebSocketSessionMap.removeSession(session);
             removeUdIdMapAndSet(session);

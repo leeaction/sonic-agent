@@ -167,16 +167,8 @@ public class IOSStepHandler {
             //测试异常
             setResultDetailStatus(ResultDetailStatus.WARN);
         } finally {
-            if (IOSProcessMap.getMap().get(udId) != null) {
-                List<Process> processList = IOSProcessMap.getMap().get(udId);
-                for (Process p : processList) {
-                    if (p != null) {
-                        p.children().forEach(ProcessHandle::destroy);
-                        p.destroy();
-                    }
-                }
-                IOSProcessMap.getMap().remove(udId);
-            }
+            // 注意：不停止 WDA 进程，因为屏幕端可能还在使用
+            // WDA 会在设备断开或屏幕端关闭时清理
         }
     }
 

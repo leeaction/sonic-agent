@@ -57,6 +57,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 import java.util.stream.Collectors;
 
@@ -84,6 +85,64 @@ public class SibTool implements ApplicationListener<ContextRefreshedEvent> {
     private static Map<String, Integer> webViewMap = new HashMap<>();
     // 存储 WDA 端口：key=udId, value={wdaPort, mjpegPort}
     private static Map<String, int[]> wdaPortMap = new HashMap<>();
+    // WDA 引用计数：key=udId, value=引用次数（屏幕端和控制端）
+    private static Map<String, Integer> wdaRefCount = new ConcurrentHashMap<>();
+
+    /**
+     * 增加 WDA 引用计数
+     */
+    public static void incrementWdaRef(String udId) {
+        wdaRefCount.merge(udId, 1, Integer::sum);
+        logger.info("WDA ref count for {}: {}", udId, wdaRefCount.get(udId));
+    }
+
+    /**
+     * 减少 WDA 引用计数，当计数为0时停止 WDA
+     */
+    public static void decrementWdaRef(String udId) {
+        Integer count = wdaRefCount.get(udId);
+        if (count == null) {
+            return;
+        }
+        int newCount = count - 1;
+        if (newCount <= 0) {
+            wdaRefCount.remove(udId);
+            // 引用为0，停止 WDA
+            stopWda(udId);
+        } else {
+            wdaRefCount.put(udId, newCount);
+            logger.info("WDA ref count for {}: {}", udId, newCount);
+        }
+    }
+
+    /**
+     * 停止 WDA 进程
+     */
+    public static void stopWda(String udId) {
+        logger.info("Stopping WDA for {}", udId);
+        if (IOSProcessMap.getMap().get(udId) != null) {
+            List<Process> processList = IOSProcessMap.getMap().get(udId);
+            for (Process p : processList) {
+                if (p != null) {
+                    p.children().forEach(ProcessHandle::destroy);
+                    p.destroy();
+                }
+            }
+            IOSProcessMap.getMap().remove(udId);
+        }
+        wdaPortMap.remove(udId);
+    }
+
+    /**
+     * 强制停止 WDA（忽略引用计数，用于手动关闭）
+     */
+    public static void forceStopWda(String udId) {
+        logger.info("Force stopping WDA for {}", udId);
+        // 清理引用计数
+        wdaRefCount.remove(udId);
+        // 停止 WDA 进程
+        stopWda(udId);
+    }
 
     @PostConstruct
     public void setEnv() {
@@ -234,6 +293,8 @@ public class SibTool implements ApplicationListener<ContextRefreshedEvent> {
             boolean isRunning = processList.stream().anyMatch(p -> p != null && p.isAlive());
             if (isRunning) {
                 logger.info("WDA already running for {}, reusing existing instance", udId);
+                // 复用时也要增加引用计数
+                incrementWdaRef(udId);
                 return wdaPortMap.get(udId);
             }
         }
@@ -335,6 +396,8 @@ public class SibTool implements ApplicationListener<ContextRefreshedEvent> {
         }
         IOSProcessMap.getMap().put(udId, processList);
         wdaPortMap.put(udId, new int[]{wdaPort, mjpegPort});
+        // 增加引用计数
+        incrementWdaRef(udId);
         return new int[]{wdaPort, mjpegPort};
     }
 
