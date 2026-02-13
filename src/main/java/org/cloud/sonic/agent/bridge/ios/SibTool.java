@@ -82,6 +82,8 @@ public class SibTool implements ApplicationListener<ContextRefreshedEvent> {
     @Autowired
     private RestTemplate restTemplateBean;
     private static Map<String, Integer> webViewMap = new HashMap<>();
+    // 存储 WDA 端口：key=udId, value={wdaPort, mjpegPort}
+    private static Map<String, int[]> wdaPortMap = new HashMap<>();
 
     @PostConstruct
     public void setEnv() {
@@ -226,6 +228,16 @@ public class SibTool implements ApplicationListener<ContextRefreshedEvent> {
     }
 
     public static int[] startWda(String udId, int wdaPort, int mjpegPort) throws IOException, InterruptedException {
+        // 检查 WDA 是否已在运行
+        if (wdaPortMap.get(udId) != null && IOSProcessMap.getMap().get(udId) != null) {
+            List<Process> processList = IOSProcessMap.getMap().get(udId);
+            boolean isRunning = processList.stream().anyMatch(p -> p != null && p.isAlive());
+            if (isRunning) {
+                logger.info("WDA already running for {}, reusing existing instance", udId);
+                return wdaPortMap.get(udId);
+            }
+        }
+
         List<Process> processList;
         if (IOSProcessMap.getMap().get(udId) != null) {
             processList = IOSProcessMap.getMap().get(udId);
@@ -322,6 +334,7 @@ public class SibTool implements ApplicationListener<ContextRefreshedEvent> {
             processList.add(iProxyProcess[0]);
         }
         IOSProcessMap.getMap().put(udId, processList);
+        wdaPortMap.put(udId, new int[]{wdaPort, mjpegPort});
         return new int[]{wdaPort, mjpegPort};
     }
 
