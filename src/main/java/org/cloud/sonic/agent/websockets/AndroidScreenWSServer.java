@@ -74,19 +74,17 @@ public class AndroidScreenWSServer implements IAndroidWSServer {
         WebSocketSessionMap.addSession(session);
         saveUdIdMapAndSet(session, iDevice);
 
-        int wait = 0;
-        boolean isInstall = true;
-        while (AndroidAPKMap.getMap().get(udId) == null || (!AndroidAPKMap.getMap().get(udId))) {
-            Thread.sleep(500);
-            wait++;
-            if (wait >= 40) {
-                isInstall = false;
-                break;
+        // 如果 Sonic APK 服务未启动，主动初始化
+        if (AndroidAPKMap.getMap().get(udId) == null || !AndroidAPKMap.getMap().get(udId)) {
+            AndroidAPKMap.getMap().put(udId, false);
+            if (!AndroidDeviceBridgeTool.installSonicApk(iDevice)) {
+                AndroidAPKMap.getMap().remove(udId);
+                log.info("Sonic apk install failed!");
+                exit(session);
+                return;
             }
-        }
-        if (!isInstall) {
-            log.info("Waiting for apk install timeout!");
-            exit(session);
+            AndroidDeviceBridgeTool.executeCommand(iDevice, "am start -n org.cloud.sonic.android/.SonicServiceActivity");
+            AndroidAPKMap.getMap().put(udId, true);
         }
 
         session.getUserProperties().put("schedule",ScheduleTool.schedule(() -> {
@@ -103,13 +101,13 @@ public class AndroidScreenWSServer implements IAndroidWSServer {
 
     @OnClose
     public void onClose(Session session) {
+        log.info("AndroidScreenWSServer onClose called for: {}", session.getUserProperties().get("id"));
         exit(session);
     }
 
     @OnError
     public void onError(Session session, Throwable error) {
-        log.error(error.getMessage());
-        error.printStackTrace();
+        log.error("AndroidScreenWSServer onError called: {}", error.getMessage(), error);
         JSONObject errMsg = new JSONObject();
         errMsg.put("msg", "error");
         BytesTool.sendText(session, errMsg.toJSONString());
@@ -183,9 +181,13 @@ public class AndroidScreenWSServer implements IAndroidWSServer {
     }
 
     private void exit(Session session) {
+        String caller = Thread.currentThread().getStackTrace()[2].getMethodName();
+        log.info("AndroidScreenWSServer exit() called by: {} for session: {}", caller, session.getUserProperties().get("id"));
         synchronized (session) {
             ScheduledFuture<?> future = (ScheduledFuture<?>) session.getUserProperties().get("schedule");
-            future.cancel(true);
+            if (future != null) {
+                future.cancel(true);
+            }
             String udId = session.getUserProperties().get("udId").toString();
             androidMonitorHandler.stopMonitor(udIdMap.get(session));
             WebSocketSessionMap.removeSession(session);

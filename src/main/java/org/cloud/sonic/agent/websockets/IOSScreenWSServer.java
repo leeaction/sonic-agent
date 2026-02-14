@@ -25,6 +25,7 @@ import jakarta.websocket.Session;
 import jakarta.websocket.server.PathParam;
 import jakarta.websocket.server.ServerEndpoint;
 import lombok.extern.slf4j.Slf4j;
+import org.cloud.sonic.agent.bridge.ios.IOSDeviceThreadPool;
 import org.cloud.sonic.agent.bridge.ios.SibTool;
 import org.cloud.sonic.agent.common.config.WsEndpointConfigure;
 import org.cloud.sonic.agent.common.maps.WebSocketSessionMap;
@@ -69,6 +70,22 @@ public class IOSScreenWSServer implements IIOSWSServer {
         WebSocketSessionMap.addSession(session);
         saveUdIdMapAndSet(session, udId);
 
+        // 如果 WDA 未启动，独立启动它
+        if (IOSWSServer.screenMap.get(udId) == null) {
+            log.info("WDA not running, starting independently for screen...");
+            IOSDeviceThreadPool.cachedThreadPool.execute(() -> {
+                try {
+                    int[] ports = SibTool.startWda(udId);
+                    if (ports[1] != 0) {
+                        IOSWSServer.screenMap.put(udId, ports[1]);
+                        log.info("WDA started for screen, mjpeg port: {}", ports[1]);
+                    }
+                } catch (Exception e) {
+                    log.error("Failed to start WDA for screen: {}", e.getMessage());
+                }
+            });
+        }
+
         int screenPort = 0;
         int wait = 0;
         while (wait < 120) {
@@ -81,6 +98,7 @@ public class IOSScreenWSServer implements IIOSWSServer {
             wait++;
         }
         if (screenPort == 0) {
+            log.info("Waiting for WDA screen port timeout!");
             return;
         }
         int finalScreenPort = screenPort;
@@ -159,7 +177,14 @@ public class IOSScreenWSServer implements IIOSWSServer {
     private void exit(Session session) {
         synchronized (session) {
             ScheduledFuture<?> future = (ScheduledFuture<?>) session.getUserProperties().get("schedule");
-            future.cancel(true);
+            if (future != null) {
+                future.cancel(true);
+            }
+            String udId = (String) session.getUserProperties().get("udId");
+            // 减少 WDA 引用计数，如果为0则停止 WDA
+            if (udId != null) {
+                SibTool.decrementWdaRef(udId);
+            }
             WebSocketSessionMap.removeSession(session);
             removeUdIdMapAndSet(session);
             try {
