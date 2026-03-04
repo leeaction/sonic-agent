@@ -92,6 +92,8 @@ public class IOSWSServer implements IIOSWSServer {
 
         if (!SibTool.getDeviceList().contains(udId)) {
             log.info("Target device is not connecting, please check the connection.");
+            DevicesLockMap.unlockAndRemoveByUdId(udId);
+            log.info("ios unlock udId：{}", udId);
             return;
         }
 

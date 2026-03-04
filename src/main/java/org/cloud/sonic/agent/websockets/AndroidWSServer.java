@@ -89,6 +89,8 @@ public class AndroidWSServer implements IAndroidWSServer {
         IDevice iDevice = AndroidDeviceBridgeTool.getIDeviceByUdId(udId);
         if (iDevice == null) {
             log.info("Target device is not connecting, please check the connection.");
+            DevicesLockMap.unlockAndRemoveByUdId(udId);
+            log.info("android unlock udId：{}", udId);
             return;
         }
 
