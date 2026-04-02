@@ -414,7 +414,7 @@ public class SibTool implements ApplicationListener<ContextRefreshedEvent> {
     public static void install(String udId, String path) {
         String commandLine;
         if (isUpperThanIos17(udId)) {
-            commandLine = String.format("ideviceinstaller -u %s -i %s", udId, path);
+            commandLine = String.format("ideviceinstaller -u %s install %s", udId, path);
         } else {
             commandLine = String.format("%s app install -u %s -p %s", sib, udId, path);
         }
