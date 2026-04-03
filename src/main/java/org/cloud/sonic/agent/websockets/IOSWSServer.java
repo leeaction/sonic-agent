@@ -55,9 +55,12 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.Calendar;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static org.cloud.sonic.agent.tools.BytesTool.sendText;
 
@@ -298,29 +301,106 @@ public class IOSWSServer implements IIOSWSServer {
                 }
                 case "installCert" -> SibTool.launch(udId, "com.apple.mobilesafari");
                 case "launch" -> {
+                    String pkg = msg.getString("pkg");
+                    JSONObject result = new JSONObject();
+                    result.put("msg", "launchResult");
+                    result.put("pkg", pkg);
+
                     if (SibTool.isUpperThanIos17(udId)) {
                         if (iosDriver != null) {
-                            try {
-                                iosDriver.appActivate(msg.getString("pkg"));
-                            } catch (SonicRespException e) {
-                                log.info(e.fillInStackTrace().toString());
+                            // 预检查：验证应用是否已安装
+                            List<String> installedApps = SibTool.getAppList(udId);
+                            if (!installedApps.contains(pkg)) {
+                                result.put("status", "error");
+                                result.put("error", "App not installed: " + pkg);
+                                sendText(session, result.toJSONString());
+                                break;
                             }
+
+                            // 带超时的异步执行，避免 appActivate 阻塞
+                            IOSDriver finalIosDriver = iosDriver;
+                            CompletableFuture<Boolean> future = CompletableFuture.supplyAsync(() -> {
+                                try {
+                                    finalIosDriver.appActivate(pkg);
+                                    return true;
+                                } catch (Exception e) {
+                                    log.error("appActivate failed: {}", e.getMessage());
+                                    return false;
+                                }
+                            });
+
+                            try {
+                                boolean success = future.get(10, TimeUnit.SECONDS);
+                                result.put("status", success ? "success" : "error");
+                                if (!success) {
+                                    result.put("error", "appActivate failed");
+                                }
+                            } catch (TimeoutException e) {
+                                future.cancel(true);
+                                result.put("status", "error");
+                                result.put("error", "Launch timeout after 10 seconds");
+                                log.warn("appActivate timeout for pkg: {}", pkg);
+                            } catch (Exception e) {
+                                result.put("status", "error");
+                                result.put("error", e.getMessage());
+                            }
+                            sendText(session, result.toJSONString());
+                        } else {
+                            result.put("status", "error");
+                            result.put("error", "Driver not initialized");
+                            sendText(session, result.toJSONString());
                         }
                     } else {
-                        SibTool.launch(udId, msg.getString("pkg"));
+                        SibTool.launch(udId, pkg);
+                        result.put("status", "success");
+                        sendText(session, result.toJSONString());
                     }
                 }
                 case "kill" -> {
+                    String pkg = msg.getString("pkg");
+                    JSONObject result = new JSONObject();
+                    result.put("msg", "killResult");
+                    result.put("pkg", pkg);
+
                     if (SibTool.isUpperThanIos17(udId)) {
                         if (iosDriver != null) {
+                            // 带超时的异步执行，避免 appTerminate 阻塞
+                            IOSDriver finalIosDriver = iosDriver;
+                            CompletableFuture<Boolean> future = CompletableFuture.supplyAsync(() -> {
+                                try {
+                                    finalIosDriver.appTerminate(pkg);
+                                    return true;
+                                } catch (Exception e) {
+                                    log.error("appTerminate failed: {}", e.getMessage());
+                                    return false;
+                                }
+                            });
+
                             try {
-                                iosDriver.appTerminate(msg.getString("pkg"));
-                            } catch (SonicRespException e) {
-                                log.info(e.fillInStackTrace().toString());
+                                boolean success = future.get(10, TimeUnit.SECONDS);
+                                result.put("status", success ? "success" : "error");
+                                if (!success) {
+                                    result.put("error", "appTerminate failed");
+                                }
+                            } catch (TimeoutException e) {
+                                future.cancel(true);
+                                result.put("status", "error");
+                                result.put("error", "Kill timeout after 10 seconds");
+                                log.warn("appTerminate timeout for pkg: {}", pkg);
+                            } catch (Exception e) {
+                                result.put("status", "error");
+                                result.put("error", e.getMessage());
                             }
+                            sendText(session, result.toJSONString());
+                        } else {
+                            result.put("status", "error");
+                            result.put("error", "Driver not initialized");
+                            sendText(session, result.toJSONString());
                         }
                     } else {
-                        SibTool.kill(udId, msg.getString("pkg"));
+                        SibTool.kill(udId, pkg);
+                        result.put("status", "success");
+                        sendText(session, result.toJSONString());
                     }
                 }
                 case "uninstallApp" -> SibTool.uninstall(udId, msg.getString("detail"));
