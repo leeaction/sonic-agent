@@ -40,6 +40,11 @@ public class DownloadTool {
         }
         String filename = "test-output" + File.separator + "download-" + time + "." + tail;
         File file = new File(filename);
+        // 确保父目录存在
+        File parentDir = file.getParentFile();
+        if (parentDir != null && !parentDir.exists()) {
+            parentDir.mkdirs();
+        }
         FileOutputStream os;
         os = new FileOutputStream(file, true);
         while ((len = is.read(bs)) != -1) {
