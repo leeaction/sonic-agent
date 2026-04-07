@@ -54,21 +54,27 @@ public class DownloadCache {
      */
     public static File downloadWithCache(String url) throws IOException {
         String urlHash = md5(url);
+        File cachedFile = null;
 
         // 1. 读锁检查缓存
         indexLock.readLock().lock();
         try {
             JSONObject entry = getCacheEntry(urlHash);
             if (entry != null && !isExpired(entry.getLongValue("downloadedAt"))) {
-                File cachedFile = new File(entry.getString("filePath"));
-                if (cachedFile.exists() && cachedFile.canRead() && cachedFile.length() > 0) {
-                    updateLastAccessedAt(urlHash);
-                    log.info("缓存命中: {}", url);
-                    return cachedFile;
+                File file = new File(entry.getString("filePath"));
+                if (file.exists() && file.canRead() && file.length() > 0) {
+                    cachedFile = file;
                 }
             }
         } finally {
             indexLock.readLock().unlock();
+        }
+
+        // 缓存命中，更新访问时间（在读锁外执行）
+        if (cachedFile != null) {
+            updateLastAccessedAt(urlHash);
+            log.info("缓存命中: {}", url);
+            return cachedFile;
         }
 
         // 2. 防止同一 URL 重复下载
