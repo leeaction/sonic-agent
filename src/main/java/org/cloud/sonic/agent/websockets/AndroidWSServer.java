@@ -328,7 +328,7 @@ public class AndroidWSServer implements IAndroidWSServer {
                             if (msg.getString("apk").contains("http")) {
                                 localFile = PackageManager.downloadWithCache(msg.getString("apk"));
                             }
-                            boolean force = msg.getBooleanValue("forceInstall", false);
+                            boolean force = msg.getBooleanValue("forceInstall");
                             InstallResult installResult = PackageManager.installIfNeeded(iDevice, localFile, force);
                             if (installResult.getStatus() == InstallResult.Status.FAILED) {
                                 throw new Exception(installResult.getMessage());

@@ -5,7 +5,29 @@
       "WebFetch(domain:github.com)",
       "Bash(gh api:*)",
       "Bash(mvn compile:*)",
-      "Bash(ls -la *.gradle)"
+      "Bash(ls -la *.gradle)",
+      "Bash(./plugins/sonic-ios-bridge)",
+      "Bash(sib --help)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(mvn:*)",
+      "Bash(/usr/local/bin/mvn --version)",
+      "Bash(/opt/homebrew/bin/mvn --version)",
+      "Read(//usr/**)",
+      "Read(//Users/limeng/Library/**)",
+      "Read(//Users/limeng/.m2/**)",
+      "Read(//Users/limeng/.sdkman/candidates/maven/current/bin/**)",
+      "Read(//Users/limeng/.sdkman/candidates/**)",
+      "Bash(mdfind -name mvn)",
+      "Bash(/Applications/IntelliJ*/Contents/plugins/maven/lib/maven3/bin/mvn)",
+      "Bash(--version)",
+      "Bash(\"/Applications/IntelliJ IDEA CE.app/Contents/plugins/maven/lib/maven3/bin/mvn\" dependency:resolve -q)",
+      "Bash(./mvnw test:*)",
+      "Bash(ls /Users/limeng/work/autospecter/sonic-agent/*.xml)",
+      "Bash(ls /Users/limeng/work/autospecter/sonic-agent/mvn*)",
+      "Bash(echo PATH=$PATH)",
+      "Bash(./mvnw compile:*)",
+      "Bash(ls:*)"
     ]
   }
 }

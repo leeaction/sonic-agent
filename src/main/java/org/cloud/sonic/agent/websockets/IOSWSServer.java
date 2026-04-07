@@ -564,7 +564,7 @@ public class IOSWSServer implements IIOSWSServer {
                                 if (msg.getString("ipa").contains("http")) {
                                     localFile = PackageManager.downloadWithCache(msg.getString("ipa"));
                                 }
-                                boolean force = msg.getBooleanValue("forceInstall", false);
+                                boolean force = msg.getBooleanValue("forceInstall");
                                 InstallResult installResult = PackageManager.installIfNeeded(udId, localFile, force);
                                 if (installResult.getStatus() == InstallResult.Status.FAILED) {
                                     throw new Exception(installResult.getMessage());

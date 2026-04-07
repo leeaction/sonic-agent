@@ -362,8 +362,6 @@ public class DownloadCache {
         log.info("计算文件 MD5: {}", file.getName());
         return fileMd5(file);
     }
-        }
-    }
 
     /**
      * 计算文件 MD5
