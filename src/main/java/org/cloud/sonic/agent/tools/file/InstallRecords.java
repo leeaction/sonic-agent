@@ -136,7 +136,11 @@ public class InstallRecords {
         }
         try {
             String content = Files.readString(recordsFile.toPath(), StandardCharsets.UTF_8);
-            return JSON.parseObject(content);
+            if (content == null || content.isBlank()) {
+                return new JSONObject();
+            }
+            JSONObject result = JSON.parseObject(content);
+            return result != null ? result : new JSONObject();
         } catch (Exception e) {
             log.warn("安装记录文件损坏，将重新创建: {}", e.getMessage());
             try {
