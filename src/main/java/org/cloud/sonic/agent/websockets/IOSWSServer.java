@@ -37,6 +37,8 @@ import org.cloud.sonic.agent.tests.handlers.IOSStepHandler;
 import org.cloud.sonic.agent.tests.ios.IOSRunStepThread;
 import org.cloud.sonic.agent.tools.*;
 import org.cloud.sonic.agent.tools.file.DownloadTool;
+import org.cloud.sonic.agent.tools.file.InstallResult;
+import org.cloud.sonic.agent.tools.file.PackageManager;
 import org.cloud.sonic.agent.tools.file.UploadTools;
 import org.cloud.sonic.agent.transport.TransportWorker;
 import org.cloud.sonic.driver.common.enums.PasteboardType;
@@ -558,10 +560,21 @@ public class IOSWSServer implements IIOSWSServer {
                             JSONObject result = new JSONObject();
                             result.put("msg", "installFinish");
                             try {
-                                File localFile = DownloadTool.download(msg.getString("ipa"));
-                                SibTool.install(udId, localFile.getAbsolutePath());
+                                File localFile = new File(msg.getString("ipa"));
+                                if (msg.getString("ipa").contains("http")) {
+                                    localFile = PackageManager.downloadWithCache(msg.getString("ipa"));
+                                }
+                                boolean force = msg.getBooleanValue("forceInstall", false);
+                                InstallResult installResult = PackageManager.installIfNeeded(udId, localFile, force);
+                                if (installResult.getStatus() == InstallResult.Status.FAILED) {
+                                    throw new Exception(installResult.getMessage());
+                                }
                                 result.put("status", "success");
-                            } catch (IOException e) {
+                                if (installResult.getStatus() == InstallResult.Status.SKIPPED) {
+                                    result.put("skipped", true);
+                                    result.put("reason", installResult.getMessage());
+                                }
+                            } catch (Exception e) {
                                 result.put("status", "fail");
                                 e.printStackTrace();
                             }
