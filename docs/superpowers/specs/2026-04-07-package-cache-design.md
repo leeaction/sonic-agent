@@ -391,11 +391,202 @@ if (result == InstallResult.SKIPPED) {
    - `AndroidStepHandler.java` - 测试步骤中安装 APK
    - `IOSStepHandler.java` - 测试步骤中安装 IPA
 
+## 并发与线程安全
+
+### JSON 文件访问
+
+由于多个测试线程可能同时访问 cache-index.json 和 install-records.json，需要保证线程安全：
+
+```java
+public class DownloadCache {
+    private static final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
+
+    public static File downloadWithCache(String url) throws IOException {
+        lock.writeLock().lock();
+        try {
+            // 读写 cache-index.json
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+}
+```
+
+- 使用 `ReentrantReadWriteLock` 保护 JSON 文件读写
+- 读操作使用读锁，写操作使用写锁
+- 同样的机制应用于 InstallRecords
+
+## 错误处理
+
+### 损坏的缓存文件
+
+如果 cache-index.json 或 install-records.json 损坏（无效 JSON）：
+
+1. 捕获 JSON 解析异常
+2. 记录警告日志
+3. 删除损坏的文件
+4. 创建新的空索引文件
+5. 继续正常操作（视为缓存未命中）
+
+```java
+private static JSONObject loadCacheIndex() {
+    try {
+        String content = Files.readString(CACHE_INDEX_PATH);
+        return JSON.parseObject(content);
+    } catch (Exception e) {
+        log.warn("缓存索引文件损坏，将重新创建: {}", e.getMessage());
+        try {
+            Files.deleteIfExists(CACHE_INDEX_PATH);
+        } catch (IOException ignored) {}
+        return new JSONObject();
+    }
+}
+```
+
+### 缓存文件完整性验证
+
+返回缓存文件前，验证文件存在且可读：
+
+```java
+File cachedFile = new File(entry.getString("filePath"));
+if (!cachedFile.exists() || !cachedFile.canRead() || cachedFile.length() == 0) {
+    // 文件损坏或丢失，删除缓存记录，重新下载
+    removeCacheEntry(urlHash);
+    return downloadAndCache(url);
+}
+```
+
+### IPA 解析错误处理
+
+当 IPA 文件中找不到 Info.plist 时：
+
+```java
+private static ZipEntry findInfoPlist(ZipFile zipFile) throws IOException {
+    Enumeration<? extends ZipEntry> entries = zipFile.entries();
+    while (entries.hasMoreElements()) {
+        ZipEntry entry = entries.nextElement();
+        // 匹配 Payload/xxx.app/Info.plist
+        if (entry.getName().matches("Payload/[^/]+\\.app/Info\\.plist")) {
+            return entry;
+        }
+    }
+    throw new IOException("无效的 IPA 文件：未找到 Info.plist");
+}
+```
+
+### InstallResult.FAILED 处理
+
+```java
+public class InstallResult {
+    private final Status status;
+    private final String errorMessage;  // FAILED 时的错误信息
+    private final Exception exception;   // 原始异常（可选）
+
+    public enum Status {
+        INSTALLED, SKIPPED, FAILED
+    }
+}
+```
+
+调用方可以通过 `result.getErrorMessage()` 获取失败原因。
+
+## 磁盘空间管理
+
+### 缓存大小限制
+
+除了 7 天过期策略，增加最大缓存大小限制：
+
+```java
+public class DownloadCache {
+    private static final long MAX_CACHE_SIZE_BYTES = 5L * 1024 * 1024 * 1024; // 5GB
+
+    /**
+     * 清理缓存，优先清理：
+     * 1. 已过期的缓存（超过7天）
+     * 2. 如果仍超过限制，按 LRU 清理最久未使用的缓存
+     */
+    public static void cleanCache() {
+        // 先清理过期缓存
+        cleanExpiredCache();
+
+        // 检查总大小
+        long totalSize = calculateCacheSize();
+        if (totalSize > MAX_CACHE_SIZE_BYTES) {
+            // 按最后访问时间排序，删除最旧的直到低于限制
+            cleanByLRU(totalSize - MAX_CACHE_SIZE_BYTES);
+        }
+    }
+}
+```
+
+### 清理时机
+
+- **异步清理**：缓存清理在后台线程执行，不阻塞主操作
+- **触发时机**：每次成功下载新文件后触发异步清理
+
+```java
+public static File downloadWithCache(String url) throws IOException {
+    // ... 下载逻辑 ...
+
+    // 异步清理，不阻塞返回
+    CompletableFuture.runAsync(DownloadCache::cleanCache);
+
+    return downloadedFile;
+}
+```
+
+## 旧文件迁移
+
+现有的 `test-output/download-*.apk` 文件处理策略：
+
+1. **不自动迁移**：这些是临时文件，不纳入新缓存系统
+2. **不自动删除**：避免误删用户可能需要的文件
+3. **文档说明**：在部署文档中建议用户可以手动清理旧的 download-* 文件
+
+## WebSocket 协议变化
+
+### force 参数传递
+
+在 WebSocket 消息中增加可选的 `forceInstall` 字段：
+
+**Android 安装消息**：
+```json
+{
+  "msg": "install",
+  "apk": "https://example.com/app.apk",
+  "forceInstall": true  // 可选，默认 false
+}
+```
+
+**iOS 安装消息**：
+```json
+{
+  "msg": "install",
+  "ipa": "https://example.com/app.ipa",
+  "forceInstall": true  // 可选，默认 false
+}
+```
+
+**处理逻辑**：
+```java
+boolean force = msg.getBooleanValue("forceInstall", false);
+InstallResult result = PackageManager.installIfNeeded(iDevice, localFile, force);
+```
+
+## 可变 URL 处理
+
+对于指向可变内容的 URL（如 `/latest.apk`）：
+
+1. **默认行为**：基于 URL 缓存，可能返回旧版本
+2. **解决方案**：调用方使用 `forceInstall: true` 强制重新下载和安装
+3. **建议**：服务端 URL 应包含版本号或 hash（如 `/app-v1.2.3.apk` 或 `/app-abc123.apk`）
+
 ## 兼容性考虑
 
 1. **保留原有 DownloadTool**: 不修改原有 `DownloadTool.download()` 方法，新增 `PackageManager` 作为上层封装
 2. **渐进式迁移**: 调用方可以逐步迁移到新接口
 3. **force 参数**: 提供强制重装选项，应对特殊场景
+4. **WebSocket 协议向后兼容**: `forceInstall` 是可选字段，不影响现有客户端
 
 ## 测试要点
 
@@ -404,5 +595,8 @@ if (result == InstallResult.SKIPPED) {
 3. 安装记录命中/未命中场景
 4. force=true 强制重装
 5. APK/IPA 解析正确性
-6. 并发下载/安装场景
-7. 异常处理（网络错误、文件损坏等）
+6. **并发下载/安装场景** - 多线程同时下载同一 URL
+7. **异常处理** - 网络错误、文件损坏、无效安装包
+8. **磁盘空间限制** - 缓存超过 5GB 时的 LRU 清理
+9. **损坏文件恢复** - cache-index.json 损坏时的自动恢复
+10. **缓存文件完整性** - 缓存文件丢失或损坏时的处理
