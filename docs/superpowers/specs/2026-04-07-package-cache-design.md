@@ -393,14 +393,14 @@ SibTool.install(udId, localFile.getAbsolutePath());
 // Android
 File localFile = PackageManager.downloadWithCache(msg.getString("apk"));
 InstallResult result = PackageManager.installIfNeeded(iDevice, localFile, false);
-if (result == InstallResult.SKIPPED) {
+if (result.getStatus() == InstallResult.Status.SKIPPED) {
     log.info("相同版本已安装，跳过");
 }
 
 // iOS
 File localFile = PackageManager.downloadWithCache(msg.getString("ipa"));
 InstallResult result = PackageManager.installIfNeeded(udId, localFile, false);
-if (result == InstallResult.SKIPPED) {
+if (result.getStatus() == InstallResult.Status.SKIPPED) {
     log.info("相同版本已安装，跳过");
 }
 ```
