@@ -42,6 +42,8 @@ import org.cloud.sonic.agent.tools.BytesTool;
 import org.cloud.sonic.agent.tools.PortTool;
 import org.cloud.sonic.agent.tools.SpringTool;
 import org.cloud.sonic.agent.tools.file.DownloadTool;
+import org.cloud.sonic.agent.tools.file.InstallResult;
+import org.cloud.sonic.agent.tools.file.PackageManager;
 import org.cloud.sonic.agent.tools.file.UploadTools;
 import org.cloud.sonic.driver.android.AndroidDriver;
 import org.cloud.sonic.driver.android.enmus.AndroidSelector;
@@ -369,10 +371,15 @@ public class AndroidStepHandler {
         File localFile = new File(path);
         try {
             if (path.contains("http")) {
-                localFile = DownloadTool.download(path);
+                localFile = PackageManager.downloadWithCache(path);
             }
             log.sendStepLog(StepType.INFO, "", "开始安装App，请稍后...");
-            AndroidDeviceBridgeTool.install(iDevice, localFile.getAbsolutePath());
+            InstallResult installResult = PackageManager.installIfNeeded(iDevice, localFile, false);
+            if (installResult.getStatus() == InstallResult.Status.SKIPPED) {
+                log.sendStepLog(StepType.INFO, "", "相同版本已安装，跳过安装");
+            } else if (installResult.getStatus() == InstallResult.Status.FAILED) {
+                throw new Exception(installResult.getMessage());
+            }
         } catch (Exception e) {
             handleContext.setE(e);
         }
