@@ -51,7 +51,7 @@
 
 - [ ] **Step 1: Add apk-parser dependency**
 
-Add after the existing dependencies (around line 136):
+Add before the closing `</dependencies>` tag:
 
 ```xml
         <!-- APK 解析 -->
@@ -1324,26 +1324,33 @@ import org.cloud.sonic.agent.tools.file.InstallResult;
 
 - [ ] **Step 2: Update APK install handler**
 
-Find the install handling code (around line 324-330) and update:
+Find the `case "install"` block (around line 321-336). The code runs in a thread pool. Update the inner logic:
 
 ```java
-// 原代码:
-// File localFile = new File(msg.getString("apk"));
-// if (msg.getString("apk").contains("http")) {
-//     localFile = DownloadTool.download(msg.getString("apk"));
-// }
-// AndroidDeviceBridgeTool.install(iDevice, localFile.getAbsolutePath());
-
-// 新代码:
-File localFile = new File(msg.getString("apk"));
-if (msg.getString("apk").contains("http")) {
-    localFile = PackageManager.downloadWithCache(msg.getString("apk"));
-}
-boolean force = msg.getBooleanValue("forceInstall", false);
-InstallResult installResult = PackageManager.installIfNeeded(iDevice, localFile, force);
-if (installResult.getStatus() == InstallResult.Status.SKIPPED) {
-    log.info("安装跳过: {}", installResult.getMessage());
-}
+case "install" -> AndroidDeviceThreadPool.cachedThreadPool.execute(() -> {
+    JSONObject result = new JSONObject();
+    result.put("msg", "installFinish");
+    try {
+        File localFile = new File(msg.getString("apk"));
+        if (msg.getString("apk").contains("http")) {
+            localFile = PackageManager.downloadWithCache(msg.getString("apk"));
+        }
+        boolean force = msg.getBooleanValue("forceInstall", false);
+        InstallResult installResult = PackageManager.installIfNeeded(iDevice, localFile, force);
+        if (installResult.getStatus() == InstallResult.Status.FAILED) {
+            throw new Exception(installResult.getMessage());
+        }
+        result.put("status", "success");
+        if (installResult.getStatus() == InstallResult.Status.SKIPPED) {
+            result.put("skipped", true);
+            result.put("reason", installResult.getMessage());
+        }
+    } catch (Exception e) {
+        result.put("status", "fail");
+        e.printStackTrace();
+    }
+    BytesTool.sendText(session, result.toJSONString());
+});
 ```
 
 - [ ] **Step 3: Verify compilation**
@@ -1376,19 +1383,32 @@ import org.cloud.sonic.agent.tools.file.InstallResult;
 
 - [ ] **Step 2: Update IPA install handler**
 
-Find the install handling code (around line 561) and update:
+Find the `case "install"` block (around line 557-569). Update the full block:
 
 ```java
-// 原代码:
-// File localFile = DownloadTool.download(msg.getString("ipa"));
-// SibTool.install(udId, localFile.getAbsolutePath());
-
-// 新代码:
-File localFile = PackageManager.downloadWithCache(msg.getString("ipa"));
-boolean force = msg.getBooleanValue("forceInstall", false);
-InstallResult installResult = PackageManager.installIfNeeded(udId, localFile, force);
-if (installResult.getStatus() == InstallResult.Status.SKIPPED) {
-    log.info("安装跳过: {}", installResult.getMessage());
+case "install" -> {
+    JSONObject result = new JSONObject();
+    result.put("msg", "installFinish");
+    try {
+        File localFile = new File(msg.getString("ipa"));
+        if (msg.getString("ipa").contains("http")) {
+            localFile = PackageManager.downloadWithCache(msg.getString("ipa"));
+        }
+        boolean force = msg.getBooleanValue("forceInstall", false);
+        InstallResult installResult = PackageManager.installIfNeeded(udId, localFile, force);
+        if (installResult.getStatus() == InstallResult.Status.FAILED) {
+            throw new Exception(installResult.getMessage());
+        }
+        result.put("status", "success");
+        if (installResult.getStatus() == InstallResult.Status.SKIPPED) {
+            result.put("skipped", true);
+            result.put("reason", installResult.getMessage());
+        }
+    } catch (Exception e) {
+        result.put("status", "fail");
+        e.printStackTrace();
+    }
+    sendText(session, result.toJSONString());
 }
 ```
 
