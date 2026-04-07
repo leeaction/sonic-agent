@@ -75,10 +75,15 @@ test-output/
   "<url-md5>": {
     "url": "https://example.com/app.apk",
     "filePath": "package-cache/abc123.apk",
-    "downloadedAt": 1712345678000
+    "downloadedAt": 1712345678000,
+    "lastAccessedAt": 1712456789000
   }
 }
 ```
+
+**字段说明**:
+- `downloadedAt`: 下载时间，用于判断缓存是否过期（7天）
+- `lastAccessedAt`: 最后访问时间，用于 LRU 淘汰
 
 ### install-records.json 结构
 
@@ -252,10 +257,35 @@ public class PackageManager {
             boolean force) throws Exception;
 }
 
-public enum InstallResult {
-    INSTALLED,  // 已安装
-    SKIPPED,    // 跳过（已存在相同版本）
-    FAILED      // 安装失败
+/**
+ * 安装结果
+ */
+public class InstallResult {
+    private final Status status;
+    private final String message;      // 结果描述
+    private final Exception exception; // FAILED 时的异常（可选）
+
+    public enum Status {
+        INSTALLED,  // 已安装
+        SKIPPED,    // 跳过（已存在相同版本）
+        FAILED      // 安装失败
+    }
+
+    public static InstallResult installed() {
+        return new InstallResult(Status.INSTALLED, "安装成功", null);
+    }
+
+    public static InstallResult skipped(String reason) {
+        return new InstallResult(Status.SKIPPED, reason, null);
+    }
+
+    public static InstallResult failed(String message, Exception e) {
+        return new InstallResult(Status.FAILED, message, e);
+    }
+
+    public boolean isSuccess() {
+        return status != Status.FAILED;
+    }
 }
 ```
 
@@ -399,12 +429,86 @@ if (result == InstallResult.SKIPPED) {
 
 ```java
 public class DownloadCache {
-    private static final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
+    private static final ReentrantReadWriteLock indexLock = new ReentrantReadWriteLock();
+    // 防止同一 URL 重复下载
+    private static final ConcurrentHashMap<String, CompletableFuture<File>> downloadingUrls
+        = new ConcurrentHashMap<>();
 
     public static File downloadWithCache(String url) throws IOException {
+        String urlHash = md5(url);
+
+        // 1. 读锁检查缓存
+        indexLock.readLock().lock();
+        try {
+            CacheEntry entry = getCacheEntry(urlHash);
+            if (entry != null && !entry.isExpired() && entry.fileExists()) {
+                updateLastAccessedAt(urlHash); // 更新访问时间（内部用写锁）
+                return entry.getFile();
+            }
+        } finally {
+            indexLock.readLock().unlock();
+        }
+
+        // 2. 防止同一 URL 重复下载
+        CompletableFuture<File> future = downloadingUrls.computeIfAbsent(urlHash,
+            k -> CompletableFuture.supplyAsync(() -> {
+                try {
+                    return doDownload(url, urlHash);
+                } catch (IOException e) {
+                    throw new CompletionException(e);
+                }
+            }));
+
+        try {
+            return future.get();
+        } catch (Exception e) {
+            throw new IOException("下载失败: " + url, e);
+        } finally {
+            downloadingUrls.remove(urlHash);
+        }
+    }
+
+    private static File doDownload(String url, String urlHash) throws IOException {
+        // 实际下载（不持有锁）
+        File downloaded = downloadFile(url);
+
+        // 写锁更新索引
+        indexLock.writeLock().lock();
+        try {
+            updateCacheIndex(urlHash, url, downloaded);
+        } finally {
+            indexLock.writeLock().unlock();
+        }
+
+        // 异步清理
+        triggerAsyncCleanup();
+
+        return downloaded;
+    }
+}
+```
+
+### InstallRecords 线程安全
+
+```java
+public class InstallRecords {
+    private static final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
+
+    public static boolean isInstalled(String deviceId, String packageName, String fileHash) {
+        lock.readLock().lock();
+        try {
+            // 读取并检查记录
+            return checkRecord(deviceId, packageName, fileHash);
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
+    public static void recordInstall(String deviceId, String packageName, String fileHash) {
         lock.writeLock().lock();
         try {
-            // 读写 cache-index.json
+            // 更新记录
+            saveRecord(deviceId, packageName, fileHash);
         } finally {
             lock.writeLock().unlock();
         }
@@ -412,9 +516,11 @@ public class DownloadCache {
 }
 ```
 
-- 使用 `ReentrantReadWriteLock` 保护 JSON 文件读写
-- 读操作使用读锁，写操作使用写锁
-- 同样的机制应用于 InstallRecords
+### 关键并发问题处理
+
+1. **同一 URL 并发下载**：使用 `ConcurrentHashMap<String, CompletableFuture>` 保证同一 URL 只下载一次
+2. **读写分离**：读操作用读锁，写操作用写锁，提高并发性能
+3. **锁粒度**：下载操作本身不持有锁，只在读写索引时加锁
 
 ## 错误处理
 
@@ -445,16 +551,24 @@ private static JSONObject loadCacheIndex() {
 
 ### 缓存文件完整性验证
 
-返回缓存文件前，验证文件存在且可读：
+返回缓存文件前，验证文件存在且可读（在持有读锁的情况下）：
 
 ```java
-File cachedFile = new File(entry.getString("filePath"));
-if (!cachedFile.exists() || !cachedFile.canRead() || cachedFile.length() == 0) {
-    // 文件损坏或丢失，删除缓存记录，重新下载
-    removeCacheEntry(urlHash);
-    return downloadAndCache(url);
+// 在 readLock 保护下检查
+CacheEntry entry = getCacheEntry(urlHash);
+if (entry != null && !entry.isExpired()) {
+    File cachedFile = entry.getFile();
+    // 文件验证
+    if (cachedFile.exists() && cachedFile.canRead() && cachedFile.length() > 0) {
+        updateLastAccessedAt(urlHash);
+        return cachedFile;
+    }
+    // 文件损坏，标记需要重新下载（后续在写锁保护下删除记录）
 }
+// 缓存无效，走下载流程
 ```
+
+**注意**：文件验证在读锁保护下进行，但实际使用文件时可能已被清理。调用方应准备好处理 FileNotFoundException。
 
 ### IPA 解析错误处理
 
@@ -473,22 +587,6 @@ private static ZipEntry findInfoPlist(ZipFile zipFile) throws IOException {
     throw new IOException("无效的 IPA 文件：未找到 Info.plist");
 }
 ```
-
-### InstallResult.FAILED 处理
-
-```java
-public class InstallResult {
-    private final Status status;
-    private final String errorMessage;  // FAILED 时的错误信息
-    private final Exception exception;   // 原始异常（可选）
-
-    public enum Status {
-        INSTALLED, SKIPPED, FAILED
-    }
-}
-```
-
-调用方可以通过 `result.getErrorMessage()` 获取失败原因。
 
 ## 磁盘空间管理
 
@@ -512,9 +610,17 @@ public class DownloadCache {
         // 检查总大小
         long totalSize = calculateCacheSize();
         if (totalSize > MAX_CACHE_SIZE_BYTES) {
-            // 按最后访问时间排序，删除最旧的直到低于限制
+            // 按 lastAccessedAt 排序，删除最久未使用的直到低于限制
             cleanByLRU(totalSize - MAX_CACHE_SIZE_BYTES);
         }
+    }
+
+    /**
+     * LRU 清理：按 lastAccessedAt 排序，删除最旧的缓存
+     */
+    private static void cleanByLRU(long bytesToFree) {
+        // 读取所有缓存条目，按 lastAccessedAt 升序排序
+        // 依次删除直到释放足够空间
     }
 }
 ```
@@ -523,15 +629,15 @@ public class DownloadCache {
 
 - **异步清理**：缓存清理在后台线程执行，不阻塞主操作
 - **触发时机**：每次成功下载新文件后触发异步清理
+- **错误处理**：清理失败时记录日志，不影响主流程
 
 ```java
-public static File downloadWithCache(String url) throws IOException {
-    // ... 下载逻辑 ...
-
-    // 异步清理，不阻塞返回
-    CompletableFuture.runAsync(DownloadCache::cleanCache);
-
-    return downloadedFile;
+private static void triggerAsyncCleanup() {
+    CompletableFuture.runAsync(DownloadCache::cleanCache)
+        .exceptionally(e -> {
+            log.warn("缓存清理失败: {}", e.getMessage());
+            return null;
+        });
 }
 ```
 
