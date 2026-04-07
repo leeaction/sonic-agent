@@ -104,10 +104,14 @@ public class DownloadCache {
         downloadFile(url, downloaded);
         log.info("下载完成: {}", downloaded.getAbsolutePath());
 
+        // 计算文件 MD5 并缓存
+        String fileMd5 = fileMd5(downloaded);
+        log.info("文件 MD5: {}", fileMd5);
+
         // 写锁更新索引
         indexLock.writeLock().lock();
         try {
-            updateCacheIndex(urlHash, url, downloaded);
+            updateCacheIndex(urlHash, url, downloaded, fileMd5);
         } finally {
             indexLock.writeLock().unlock();
         }
@@ -191,11 +195,12 @@ public class DownloadCache {
         return loadCacheIndex().getJSONObject(urlHash);
     }
 
-    private static void updateCacheIndex(String urlHash, String url, File file) {
+    private static void updateCacheIndex(String urlHash, String url, File file, String fileMd5) {
         JSONObject index = loadCacheIndex();
         JSONObject entry = new JSONObject();
         entry.put("url", url);
         entry.put("filePath", file.getAbsolutePath());
+        entry.put("fileMd5", fileMd5);
         entry.put("downloadedAt", System.currentTimeMillis());
         entry.put("lastAccessedAt", System.currentTimeMillis());
         index.put(urlHash, entry);
@@ -322,6 +327,35 @@ public class DownloadCache {
             return sb.toString();
         } catch (NoSuchAlgorithmException e) {
             throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * 获取缓存的文件 MD5（如果有缓存则直接返回，否则计算）
+     */
+    public static String getCachedFileMd5(File file) throws IOException {
+        // 尝试从缓存中获取 MD5
+        indexLock.readLock().lock();
+        try {
+            JSONObject index = loadCacheIndex();
+            for (String key : index.keySet()) {
+                JSONObject entry = index.getJSONObject(key);
+                if (entry != null && file.getAbsolutePath().equals(entry.getString("filePath"))) {
+                    String cachedMd5 = entry.getString("fileMd5");
+                    if (cachedMd5 != null && !cachedMd5.isEmpty()) {
+                        log.info("使用缓存的 MD5: {}", cachedMd5);
+                        return cachedMd5;
+                    }
+                    break;
+                }
+            }
+        } finally {
+            indexLock.readLock().unlock();
+        }
+        // 缓存中没有，需要计算
+        log.info("计算文件 MD5: {}", file.getName());
+        return fileMd5(file);
+    }
         }
     }
 

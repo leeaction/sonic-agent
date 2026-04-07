@@ -48,7 +48,7 @@ public class PackageManager {
             // 解析 APK
             PackageInfo packageInfo = PackageParser.parse(apkFile);
             String packageName = packageInfo.getPackageName();
-            String fileHash = DownloadCache.fileMd5(apkFile);
+            String fileHash = DownloadCache.getCachedFileMd5(apkFile);
             String deviceId = iDevice.getSerialNumber();
 
             // 检查是否需要安装
