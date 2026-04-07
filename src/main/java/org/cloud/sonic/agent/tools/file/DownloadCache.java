@@ -106,8 +106,15 @@ public class DownloadCache {
         String extension = getExtension(url);
         File downloaded = new File(cacheDirectory, urlHash + extension);
 
+        // 下载文件（带重试）
         log.info("开始下载: {}", url);
-        downloadFile(url, downloaded);
+        try {
+            downloadFileWithRetry(url, downloaded, 3);
+        } catch (IOException e) {
+            // 下载失败，删除可能存在的不完整文件
+            deleteFile(downloaded.getAbsolutePath());
+            throw e;
+        }
         log.info("下载完成: {}", downloaded.getAbsolutePath());
 
         // 计算文件 MD5 并缓存
@@ -126,6 +133,30 @@ public class DownloadCache {
         triggerAsyncCleanup();
 
         return downloaded;
+    }
+
+    private static void downloadFileWithRetry(String urlString, File target, int maxRetries) throws IOException {
+        IOException lastException = null;
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                downloadFile(urlString, target);
+                return; // 下载成功
+            } catch (IOException e) {
+                lastException = e;
+                log.warn("下载失败 (尝试 {}/{}): {} - {}", attempt, maxRetries, urlString, e.getMessage());
+                // 删除可能存在的不完整文件
+                deleteFile(target.getAbsolutePath());
+                if (attempt < maxRetries) {
+                    try {
+                        Thread.sleep(1000 * attempt); // 递增等待时间
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw new IOException("下载被中断", ie);
+                    }
+                }
+            }
+        }
+        throw new IOException("下载失败，已重试 " + maxRetries + " 次: " + urlString, lastException);
     }
 
     private static void downloadFile(String urlString, File target) throws IOException {
@@ -317,6 +348,41 @@ public class DownloadCache {
             Files.deleteIfExists(Path.of(path));
         } catch (IOException e) {
             log.warn("删除文件失败: {}", path);
+        }
+    }
+
+    /**
+     * 删除缓存文件（用于文件损坏时清理）
+     */
+    public static void removeCachedFile(File file) {
+        if (file == null || !file.exists()) {
+            return;
+        }
+        String filePath = file.getAbsolutePath();
+        log.info("删除损坏的缓存文件: {}", filePath);
+
+        // 删除物理文件
+        deleteFile(filePath);
+
+        // 从索引中移除
+        indexLock.writeLock().lock();
+        try {
+            JSONObject index = loadCacheIndex();
+            String keyToRemove = null;
+            for (String key : index.keySet()) {
+                JSONObject entry = index.getJSONObject(key);
+                if (entry != null && filePath.equals(entry.getString("filePath"))) {
+                    keyToRemove = key;
+                    break;
+                }
+            }
+            if (keyToRemove != null) {
+                index.remove(keyToRemove);
+                saveCacheIndex(index);
+                log.info("已从缓存索引中移除: {}", keyToRemove);
+            }
+        } finally {
+            indexLock.writeLock().unlock();
         }
     }
 

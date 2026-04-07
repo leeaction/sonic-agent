@@ -44,11 +44,28 @@ public class PackageManager {
      * Android 智能安装
      */
     public static InstallResult installIfNeeded(IDevice iDevice, File apkFile, boolean force) {
+        PackageInfo packageInfo;
+        String fileHash;
+
+        // 解析 APK
         try {
-            // 解析 APK
-            PackageInfo packageInfo = PackageParser.parse(apkFile);
+            packageInfo = PackageParser.parse(apkFile);
+        } catch (IOException e) {
+            log.error("APK 解析失败，删除损坏文件: {}", e.getMessage());
+            DownloadCache.removeCachedFile(apkFile);
+            return InstallResult.failed("APK 解析失败（文件可能损坏）: " + e.getMessage(), e);
+        }
+
+        // 获取文件 MD5
+        try {
+            fileHash = DownloadCache.getCachedFileMd5(apkFile);
+        } catch (IOException e) {
+            log.error("计算文件 MD5 失败: {}", e.getMessage());
+            return InstallResult.failed("计算文件 MD5 失败: " + e.getMessage(), e);
+        }
+
+        try {
             String packageName = packageInfo.getPackageName();
-            String fileHash = DownloadCache.getCachedFileMd5(apkFile);
             String deviceId = iDevice.getSerialNumber();
 
             // 检查是否需要安装
@@ -66,9 +83,6 @@ public class PackageManager {
             log.info("APK 安装成功: {} on {}", packageName, deviceId);
 
             return InstallResult.installed();
-        } catch (IOException e) {
-            log.error("APK 解析失败: {}", e.getMessage());
-            return InstallResult.failed("APK 解析失败: " + e.getMessage(), e);
         } catch (InstallException e) {
             log.error("APK 安装失败: {}", e.getMessage());
             return InstallResult.failed("APK 安装失败: " + e.getMessage(), e);
@@ -82,11 +96,28 @@ public class PackageManager {
      * iOS 智能安装
      */
     public static InstallResult installIfNeeded(String udId, File ipaFile, boolean force) {
+        PackageInfo packageInfo;
+        String fileHash;
+
+        // 解析 IPA
         try {
-            // 解析 IPA
-            PackageInfo packageInfo = PackageParser.parse(ipaFile);
+            packageInfo = PackageParser.parse(ipaFile);
+        } catch (IOException e) {
+            log.error("IPA 解析失败，删除损坏文件: {}", e.getMessage());
+            DownloadCache.removeCachedFile(ipaFile);
+            return InstallResult.failed("IPA 解析失败（文件可能损坏）: " + e.getMessage(), e);
+        }
+
+        // 获取文件 MD5
+        try {
+            fileHash = DownloadCache.getCachedFileMd5(ipaFile);
+        } catch (IOException e) {
+            log.error("计算文件 MD5 失败: {}", e.getMessage());
+            return InstallResult.failed("计算文件 MD5 失败: " + e.getMessage(), e);
+        }
+
+        try {
             String bundleId = packageInfo.getPackageName();
-            String fileHash = DownloadCache.fileMd5(ipaFile);
 
             // 检查是否需要安装
             if (!force && InstallRecords.isInstalled(udId, bundleId, fileHash)) {
@@ -103,9 +134,6 @@ public class PackageManager {
             log.info("IPA 安装成功: {} on {}", bundleId, udId);
 
             return InstallResult.installed();
-        } catch (IOException e) {
-            log.error("IPA 解析失败: {}", e.getMessage());
-            return InstallResult.failed("IPA 解析失败: " + e.getMessage(), e);
         } catch (Exception e) {
             log.error("安装异常: {}", e.getMessage());
             return InstallResult.failed("安装异常: " + e.getMessage(), e);
