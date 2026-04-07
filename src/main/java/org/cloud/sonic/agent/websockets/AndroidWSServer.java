@@ -42,6 +42,8 @@ import org.cloud.sonic.agent.tests.handlers.AndroidStepHandler;
 import org.cloud.sonic.agent.tests.handlers.AndroidTouchHandler;
 import org.cloud.sonic.agent.tools.*;
 import org.cloud.sonic.agent.tools.file.DownloadTool;
+import org.cloud.sonic.agent.tools.file.InstallResult;
+import org.cloud.sonic.agent.tools.file.PackageManager;
 import org.cloud.sonic.agent.tools.file.UploadTools;
 import org.cloud.sonic.agent.transport.TransportWorker;
 import org.cloud.sonic.driver.common.tool.SonicRespException;
@@ -324,11 +326,19 @@ public class AndroidWSServer implements IAndroidWSServer {
                         try {
                             File localFile = new File(msg.getString("apk"));
                             if (msg.getString("apk").contains("http")) {
-                                localFile = DownloadTool.download(msg.getString("apk"));
+                                localFile = PackageManager.downloadWithCache(msg.getString("apk"));
                             }
-                            AndroidDeviceBridgeTool.install(iDevice, localFile.getAbsolutePath());
+                            boolean force = msg.getBooleanValue("forceInstall");
+                            InstallResult installResult = PackageManager.installIfNeeded(iDevice, localFile, force);
+                            if (installResult.getStatus() == InstallResult.Status.FAILED) {
+                                throw new Exception(installResult.getMessage());
+                            }
                             result.put("status", "success");
-                        } catch (IOException | InstallException e) {
+                            if (installResult.getStatus() == InstallResult.Status.SKIPPED) {
+                                result.put("skipped", true);
+                                result.put("reason", installResult.getMessage());
+                            }
+                        } catch (Exception e) {
                             result.put("status", "fail");
                             e.printStackTrace();
                         }

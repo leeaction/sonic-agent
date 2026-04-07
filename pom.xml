@@ -134,6 +134,20 @@
             <artifactId>aspectjweaver</artifactId>
             <version>1.9.19</version>
         </dependency>
+
+        <!-- APK 解析 -->
+        <dependency>
+            <groupId>net.dongliu</groupId>
+            <artifactId>apk-parser</artifactId>
+            <version>2.6.10</version>
+        </dependency>
+
+        <!-- IPA plist 解析 -->
+        <dependency>
+            <groupId>com.googlecode.plist</groupId>
+            <artifactId>dd-plist</artifactId>
+            <version>1.28</version>
+        </dependency>
     </dependencies>
 
     <repositories>
