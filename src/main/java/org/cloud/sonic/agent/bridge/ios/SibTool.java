@@ -99,19 +99,20 @@ public class SibTool implements ApplicationListener<ContextRefreshedEvent> {
     /**
      * 减少 WDA 引用计数，当计数为0时停止 WDA
      */
-    public static void decrementWdaRef(String udId) {
+    public static boolean decrementWdaRef(String udId) {
         Integer count = wdaRefCount.get(udId);
         if (count == null) {
-            return;
+            return false;
         }
         int newCount = count - 1;
         if (newCount <= 0) {
             wdaRefCount.remove(udId);
-            // 引用为0，停止 WDA
             stopWda(udId);
+            return true;
         } else {
             wdaRefCount.put(udId, newCount);
             logger.info("WDA ref count for {}: {}", udId, newCount);
+            return false;
         }
     }
 
