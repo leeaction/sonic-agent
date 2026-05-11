@@ -21,3 +21,5 @@ modules:
     wda-xcode-project-path: WebdriverAgent/WebDriverAgent.xcodeproj
     # (mac only) Use enterprise-signed WDA IPA to install and launch WDA, instead of xcodebuild. | 使用企业签名的WDA IPA安装并启动WDA，替代xcodebuild方式
     wda-enterprise-sign: false
+    # (mac only) Directory containing enterprise-signed WDA IPA files. Agent picks the newest .ipa by modification time. | 存放企业签名WDA IPA文件的目录，Agent会自动选取修改时间最新的.ipa文件
+    wda-ipa-dir:

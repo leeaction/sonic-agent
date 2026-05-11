@@ -50,9 +50,14 @@ import org.springframework.web.client.RestTemplate;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.Socket;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -77,10 +82,14 @@ public class SibTool implements ApplicationListener<ContextRefreshedEvent> {
     @Value("${modules.ios.wda-enterprise-sign:false}")
     private boolean getEnterpriseSign;
 
+    @Value("${modules.ios.wda-ipa-dir:}")
+    private String getWdaIpaDir;
+
     private static String bundleId;
     private static String xcodeProjectPath;
     private static boolean enterpriseSign;
-    private static File wdaProductsDir = new File("plugins" + File.separator + "Products");
+    private static String wdaIpaDir;
+    private static final ConcurrentHashMap<String, Object> wdaStartLock = new ConcurrentHashMap<>();
     private static File sibBinary = new File("plugins" + File.separator + "sonic-ios-bridge");
     private static String sib = sibBinary.getAbsolutePath();
     private static RestTemplate restTemplate;
@@ -155,6 +164,7 @@ public class SibTool implements ApplicationListener<ContextRefreshedEvent> {
         bundleId = getBundleId;
         xcodeProjectPath = getXcodeProjectPath;
         enterpriseSign = getEnterpriseSign;
+        wdaIpaDir = getWdaIpaDir;
     }
 
     @Override
@@ -411,6 +421,34 @@ public class SibTool implements ApplicationListener<ContextRefreshedEvent> {
         return new int[]{wdaPort, mjpegPort};
     }
 
+    private static File findLatestIpa() {
+        if (wdaIpaDir == null || wdaIpaDir.isEmpty()) return null;
+        File dir = new File(wdaIpaDir);
+        File[] ipaFiles = dir.listFiles((d, name) -> name.endsWith(".ipa"));
+        if (ipaFiles == null || ipaFiles.length == 0) return null;
+        File latest = ipaFiles[0];
+        for (File f : ipaFiles) {
+            if (f.lastModified() > latest.lastModified()) latest = f;
+        }
+        return latest;
+    }
+
+    private static String computeMd5(File file) throws IOException {
+        try {
+            MessageDigest md = MessageDigest.getInstance("MD5");
+            try (InputStream is = new FileInputStream(file)) {
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = is.read(buf)) != -1) md.update(buf, 0, n);
+            }
+            StringBuilder sb = new StringBuilder();
+            for (byte b : md.digest()) sb.append(String.format("%02x", b));
+            return sb.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     public static int[] startWdaWithEnterpriseSign(String udId) throws IOException, InterruptedException {
         Socket wda = PortTool.getBindSocket();
         Socket mjpeg = PortTool.getBindSocket();
@@ -421,6 +459,8 @@ public class SibTool implements ApplicationListener<ContextRefreshedEvent> {
 
     public static int[] startWdaWithEnterpriseSign(String udId, int wdaPort, int mjpegPort)
             throws IOException, InterruptedException {
+        Object lock = wdaStartLock.computeIfAbsent(udId, k -> new Object());
+        synchronized (lock) {
         // 检查 WDA 是否已在运行
         if (wdaPortMap.get(udId) != null && IOSProcessMap.getMap().get(udId) != null) {
             List<Process> processList = IOSProcessMap.getMap().get(udId);
@@ -444,18 +484,33 @@ public class SibTool implements ApplicationListener<ContextRefreshedEvent> {
         wdaPort = (wdaPort == 0) ? PortTool.getPort() : wdaPort;
         mjpegPort = (mjpegPort == 0) ? PortTool.getPort() : mjpegPort;
 
-        // 检查 WDA 是否已安装，未安装则从 plugins/Products 目录自动安装
+        // 找最新 IPA
+        File ipaFile = findLatestIpa();
+        if (ipaFile == null) {
+            logger.error("No .ipa file found, please configure modules.ios.wda-ipa-dir");
+            return new int[]{0, 0};
+        }
+
+        // MD5 对比：IPA 未变且设备已安装则跳过安装
+        File md5Store = new File(wdaIpaDir + File.separator + "wda-installed.md5");
+        String currentMd5 = computeMd5(ipaFile);
+        String lastMd5 = "";
+        if (md5Store.exists()) {
+            lastMd5 = new String(Files.readAllBytes(md5Store.toPath()), StandardCharsets.UTF_8).trim();
+        }
+        boolean ipaChanged = !currentMd5.equals(lastMd5);
+
         List<String> checkResult = ProcessCommandTool.getProcessLocalCommand(
                 String.format("ideviceinstaller -u %s -l", udId));
         boolean wdaInstalled = checkResult.stream().anyMatch(line -> line.contains(bundleId));
-        if (!wdaInstalled) {
-            File[] ipaFiles = wdaProductsDir.listFiles((dir, name) -> name.endsWith(".ipa"));
-            if (ipaFiles == null || ipaFiles.length == 0) {
-                logger.error("No WDA .ipa file found in {}", wdaProductsDir.getAbsolutePath());
-                return new int[]{0, 0};
-            }
-            logger.info("Installing WDA {} for {}", ipaFiles[0].getName(), udId);
-            install(udId, ipaFiles[0].getAbsolutePath());
+
+        if (!wdaInstalled || ipaChanged) {
+            logger.info("Installing WDA {} for {} (ipaChanged={}, installed={})",
+                    ipaFile.getName(), udId, ipaChanged, wdaInstalled);
+            install(udId, ipaFile.getAbsolutePath());
+            Files.write(md5Store.toPath(), currentMd5.getBytes(StandardCharsets.UTF_8));
+        } else {
+            logger.info("WDA already installed and IPA unchanged, skipping install for {}", udId);
         }
 
         // 启动 WDA：iOS 17+ 使用 devicectl（CoreDevice），iOS 17- 使用 sib app launch
@@ -494,6 +549,7 @@ public class SibTool implements ApplicationListener<ContextRefreshedEvent> {
         }
         logger.info("{} WebDriverAgent start timeout!", udId);
         return new int[]{0, 0};
+        } // end synchronized
     }
 
     public static void reboot(String udId) {
