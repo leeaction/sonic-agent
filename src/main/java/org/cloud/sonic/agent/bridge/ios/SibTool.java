@@ -74,8 +74,13 @@ public class SibTool implements ApplicationListener<ContextRefreshedEvent> {
     @Value("${modules.ios.wda-xcode-project-path:default}")
     private String getXcodeProjectPath;
 
+    @Value("${modules.ios.wda-enterprise-sign:false}")
+    private boolean getEnterpriseSign;
+
     private static String bundleId;
     private static String xcodeProjectPath;
+    private static boolean enterpriseSign;
+    private static File wdaProductsDir = new File("plugins" + File.separator + "Products");
     private static File sibBinary = new File("plugins" + File.separator + "sonic-ios-bridge");
     private static String sib = sibBinary.getAbsolutePath();
     private static RestTemplate restTemplate;
@@ -149,6 +154,7 @@ public class SibTool implements ApplicationListener<ContextRefreshedEvent> {
     public void setEnv() {
         bundleId = getBundleId;
         xcodeProjectPath = getXcodeProjectPath;
+        enterpriseSign = getEnterpriseSign;
     }
 
     @Override
@@ -288,6 +294,9 @@ public class SibTool implements ApplicationListener<ContextRefreshedEvent> {
     }
 
     public static int[] startWda(String udId, int wdaPort, int mjpegPort) throws IOException, InterruptedException {
+        if (enterpriseSign) {
+            return startWdaWithEnterpriseSign(udId, wdaPort, mjpegPort);
+        }
         // 检查 WDA 是否已在运行
         if (wdaPortMap.get(udId) != null && IOSProcessMap.getMap().get(udId) != null) {
             List<Process> processList = IOSProcessMap.getMap().get(udId);
@@ -400,6 +409,91 @@ public class SibTool implements ApplicationListener<ContextRefreshedEvent> {
         // 增加引用计数
         incrementWdaRef(udId);
         return new int[]{wdaPort, mjpegPort};
+    }
+
+    public static int[] startWdaWithEnterpriseSign(String udId) throws IOException, InterruptedException {
+        Socket wda = PortTool.getBindSocket();
+        Socket mjpeg = PortTool.getBindSocket();
+        int wdaPort = PortTool.releaseAndGetPort(wda);
+        int mjpegPort = PortTool.releaseAndGetPort(mjpeg);
+        return startWdaWithEnterpriseSign(udId, wdaPort, mjpegPort);
+    }
+
+    public static int[] startWdaWithEnterpriseSign(String udId, int wdaPort, int mjpegPort)
+            throws IOException, InterruptedException {
+        // 检查 WDA 是否已在运行
+        if (wdaPortMap.get(udId) != null && IOSProcessMap.getMap().get(udId) != null) {
+            List<Process> processList = IOSProcessMap.getMap().get(udId);
+            boolean isRunning = processList.stream().anyMatch(p -> p != null && p.isAlive());
+            if (isRunning) {
+                logger.info("WDA already running for {}, reusing existing instance", udId);
+                incrementWdaRef(udId);
+                return wdaPortMap.get(udId);
+            }
+        }
+
+        // 清理旧进程
+        if (IOSProcessMap.getMap().get(udId) != null) {
+            for (Process p : IOSProcessMap.getMap().get(udId)) {
+                if (p != null) {
+                    p.children().forEach(ProcessHandle::destroy);
+                    p.destroy();
+                }
+            }
+        }
+        wdaPort = (wdaPort == 0) ? PortTool.getPort() : wdaPort;
+        mjpegPort = (mjpegPort == 0) ? PortTool.getPort() : mjpegPort;
+
+        // 检查 WDA 是否已安装，未安装则从 plugins/Products 目录自动安装
+        List<String> checkResult = ProcessCommandTool.getProcessLocalCommand(
+                String.format("ideviceinstaller -u %s -l", udId));
+        boolean wdaInstalled = checkResult.stream().anyMatch(line -> line.contains(bundleId));
+        if (!wdaInstalled) {
+            File[] ipaFiles = wdaProductsDir.listFiles((dir, name) -> name.endsWith(".ipa"));
+            if (ipaFiles == null || ipaFiles.length == 0) {
+                logger.error("No WDA .ipa file found in {}", wdaProductsDir.getAbsolutePath());
+                return new int[]{0, 0};
+            }
+            logger.info("Installing WDA {} for {}", ipaFiles[0].getName(), udId);
+            install(udId, ipaFiles[0].getAbsolutePath());
+        }
+
+        // 启动 WDA：iOS 17+ 使用 devicectl（CoreDevice），iOS 17- 使用 sib app launch
+        logger.info("Launching WDA for {}", udId);
+        if (isUpperThanIos17(udId)) {
+            ProcessCommandTool.getProcessLocalCommand(
+                    String.format("xcrun devicectl device process launch --device %s %s", udId, bundleId));
+        } else {
+            ProcessCommandTool.getProcessLocalCommand(
+                    String.format("%s app launch -u %s -b %s", sib, udId, bundleId));
+        }
+
+        // 启动 iproxy 端口转发
+        Process iproxyProc = Runtime.getRuntime().exec(
+                new String[]{"sh", "-c", String.format("iproxy -u %s %d:8100 %d:9100 -s 0.0.0.0",
+                        udId, wdaPort, mjpegPort)});
+        List<Process> processList = new ArrayList<>();
+        processList.add(iproxyProc);
+        IOSProcessMap.getMap().put(udId, processList);
+
+        // 轮询等待 WDA 就绪
+        int wait = 0;
+        while (wait < 60) {
+            Thread.sleep(1000);
+            try {
+                ResponseEntity<String> resp = restTemplate.getForEntity(
+                        "http://localhost:" + wdaPort + "/status", String.class);
+                if (resp.getStatusCode().is2xxSuccessful()) {
+                    wdaPortMap.put(udId, new int[]{wdaPort, mjpegPort});
+                    incrementWdaRef(udId);
+                    return new int[]{wdaPort, mjpegPort};
+                }
+            } catch (Exception ignored) {
+            }
+            wait++;
+        }
+        logger.info("{} WebDriverAgent start timeout!", udId);
+        return new int[]{0, 0};
     }
 
     public static void reboot(String udId) {

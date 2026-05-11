@@ -19,3 +19,5 @@ modules:
     wda-bundle-id: com.sonic.WebDriverAgentRunner
     # (mac only) Replace with the xcode project path of wda. | 替换为wda的xcode project目录
     wda-xcode-project-path: WebdriverAgent/WebDriverAgent.xcodeproj
+    # (mac only) Use enterprise-signed WDA IPA to install and launch WDA, instead of xcodebuild. | 使用企业签名的WDA IPA安装并启动WDA，替代xcodebuild方式
+    wda-enterprise-sign: false
