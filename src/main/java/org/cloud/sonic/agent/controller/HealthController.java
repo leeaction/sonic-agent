@@ -3,7 +3,6 @@ package org.cloud.sonic.agent.controller;
 import com.android.ddmlib.IDevice;
 import org.cloud.sonic.agent.bridge.android.AndroidDeviceBridgeTool;
 import org.cloud.sonic.agent.bridge.ios.SibTool;
-import org.cloud.sonic.agent.common.maps.IOSDeviceManagerMap;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -19,7 +18,7 @@ public class HealthController {
         List<Map<String, Object>> result = new ArrayList<>();
 
         // iOS devices — testReady only when WDA process is alive
-        for (String udId : IOSDeviceManagerMap.getMap().keySet()) {
+        for (String udId : SibTool.getDeviceList()) {
             result.add(Map.of(
                 "udId", udId,
                 "platform", "iOS",

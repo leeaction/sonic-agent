@@ -43,6 +43,7 @@ import org.springframework.context.event.ContextRefreshedEvent;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.*;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.lang.NonNull;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
@@ -93,6 +94,13 @@ public class SibTool implements ApplicationListener<ContextRefreshedEvent> {
     private static File sibBinary = new File("plugins" + File.separator + "sonic-ios-bridge");
     private static String sib = sibBinary.getAbsolutePath();
     private static RestTemplate restTemplate;
+    private static final RestTemplate wdaProbeTemplate;
+    static {
+        SimpleClientHttpRequestFactory f = new SimpleClientHttpRequestFactory();
+        f.setConnectTimeout(2000);
+        f.setReadTimeout(2000);
+        wdaProbeTemplate = new RestTemplate(f);
+    }
 
     @Autowired
     private RestTemplate restTemplateBean;
@@ -163,10 +171,24 @@ public class SibTool implements ApplicationListener<ContextRefreshedEvent> {
      * 检查 WDA 是否就绪
      */
     public static boolean isWdaReady(String udId) {
-        if (wdaPortMap.get(udId) == null) return false;
-        List<Process> processList = IOSProcessMap.getMap().get(udId);
-        if (processList == null || processList.isEmpty()) return false;
-        return processList.stream().anyMatch(Process::isAlive);
+        int[] ports = wdaPortMap.get(udId);
+        if (ports == null || ports[0] == 0) {
+            logger.info("isWdaReady {} no ports, result=false", udId);
+            return false;
+        }
+        try {
+            ResponseEntity<String> resp = wdaProbeTemplate.getForEntity(
+                    "http://localhost:" + ports[0] + "/status", String.class);
+            if (!resp.getStatusCode().is2xxSuccessful()) {
+                logger.info("isWdaReady {} wda http status={}, result=false", udId, resp.getStatusCode());
+                return false;
+            }
+            logger.info("isWdaReady {} ports={} result=true", udId, java.util.Arrays.toString(ports));
+            return true;
+        } catch (Exception e) {
+            logger.info("isWdaReady {} ports={} exception={}, result=false", udId, java.util.Arrays.toString(ports), e.getMessage());
+            return false;
+        }
     }
 
     @PostConstruct
@@ -321,7 +343,7 @@ public class SibTool implements ApplicationListener<ContextRefreshedEvent> {
         if (wdaPortMap.get(udId) != null && IOSProcessMap.getMap().get(udId) != null) {
             List<Process> processList = IOSProcessMap.getMap().get(udId);
             boolean isRunning = processList.stream().anyMatch(p -> p != null && p.isAlive());
-            if (isRunning) {
+            if (isRunning && isWdaReady(udId)) {
                 logger.info("WDA already running for {}, reusing existing instance", udId);
                 // 复用时也要增加引用计数
                 incrementWdaRef(udId);
@@ -471,11 +493,11 @@ public class SibTool implements ApplicationListener<ContextRefreshedEvent> {
             throws IOException, InterruptedException {
         Object lock = wdaStartLock.computeIfAbsent(udId, k -> new Object());
         synchronized (lock) {
-        // 检查 WDA 是否已在运行
+        // 检查 WDA 是否已在运行（进程存活 + HTTP 可达）
         if (wdaPortMap.get(udId) != null && IOSProcessMap.getMap().get(udId) != null) {
             List<Process> processList = IOSProcessMap.getMap().get(udId);
             boolean isRunning = processList.stream().anyMatch(p -> p != null && p.isAlive());
-            if (isRunning) {
+            if (isRunning && isWdaReady(udId)) {
                 logger.info("WDA already running for {}, reusing existing instance", udId);
                 incrementWdaRef(udId);
                 return wdaPortMap.get(udId);

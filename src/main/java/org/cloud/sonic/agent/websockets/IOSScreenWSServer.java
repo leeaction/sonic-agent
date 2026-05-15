@@ -181,11 +181,8 @@ public class IOSScreenWSServer implements IIOSWSServer {
                 future.cancel(true);
             }
             String udId = (String) session.getUserProperties().get("udId");
-            // 减少 WDA 引用计数，如果为0则停止 WDA
             if (udId != null) {
-                if (SibTool.decrementWdaRef(udId)) {
-                    IOSWSServer.screenMap.remove(udId);
-                }
+                IOSWSServer.screenMap.remove(udId);
             }
             WebSocketSessionMap.removeSession(session);
             removeUdIdMapAndSet(session);
