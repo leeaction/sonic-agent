@@ -172,21 +172,12 @@ public class SibTool implements ApplicationListener<ContextRefreshedEvent> {
      */
     public static boolean isWdaReady(String udId) {
         int[] ports = wdaPortMap.get(udId);
-        if (ports == null || ports[0] == 0) {
-            logger.info("isWdaReady {} no ports, result=false", udId);
-            return false;
-        }
+        if (ports == null || ports[0] == 0) return false;
         try {
             ResponseEntity<String> resp = wdaProbeTemplate.getForEntity(
                     "http://localhost:" + ports[0] + "/status", String.class);
-            if (!resp.getStatusCode().is2xxSuccessful()) {
-                logger.info("isWdaReady {} wda http status={}, result=false", udId, resp.getStatusCode());
-                return false;
-            }
-            logger.info("isWdaReady {} ports={} result=true", udId, java.util.Arrays.toString(ports));
-            return true;
+            return resp.getStatusCode().is2xxSuccessful();
         } catch (Exception e) {
-            logger.info("isWdaReady {} ports={} exception={}, result=false", udId, java.util.Arrays.toString(ports), e.getMessage());
             return false;
         }
     }
