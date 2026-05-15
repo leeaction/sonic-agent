@@ -159,6 +159,16 @@ public class SibTool implements ApplicationListener<ContextRefreshedEvent> {
         stopWda(udId);
     }
 
+    /**
+     * 检查 WDA 是否就绪
+     */
+    public static boolean isWdaReady(String udId) {
+        if (wdaPortMap.get(udId) == null) return false;
+        List<Process> processList = IOSProcessMap.getMap().get(udId);
+        if (processList == null || processList.isEmpty()) return false;
+        return processList.stream().anyMatch(Process::isAlive);
+    }
+
     @PostConstruct
     public void setEnv() {
         bundleId = getBundleId;
