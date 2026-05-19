@@ -444,10 +444,12 @@ public class SibTool implements ApplicationListener<ContextRefreshedEvent> {
         return new int[]{wdaPort, mjpegPort};
     }
 
-    private static File findLatestIpa() {
+    private static File findIpaForDevice(String udId) {
         if (wdaIpaDir == null || wdaIpaDir.isEmpty()) return null;
-        File dir = new File(wdaIpaDir);
-        File[] ipaFiles = dir.listFiles((d, name) -> name.endsWith(".ipa"));
+        String subdir = isUpperThanIos17(udId) ? "ios17" : "ios16";
+        File versionDir = new File(wdaIpaDir, subdir);
+        File searchDir = (versionDir.exists() && versionDir.isDirectory()) ? versionDir : new File(wdaIpaDir);
+        File[] ipaFiles = searchDir.listFiles((d, name) -> name.endsWith(".ipa"));
         if (ipaFiles == null || ipaFiles.length == 0) return null;
         File latest = ipaFiles[0];
         for (File f : ipaFiles) {
@@ -507,15 +509,15 @@ public class SibTool implements ApplicationListener<ContextRefreshedEvent> {
         wdaPort = (wdaPort == 0) ? PortTool.getPort() : wdaPort;
         mjpegPort = (mjpegPort == 0) ? PortTool.getPort() : mjpegPort;
 
-        // 找最新 IPA
-        File ipaFile = findLatestIpa();
+        // 找当前设备版本对应的 IPA
+        File ipaFile = findIpaForDevice(udId);
         if (ipaFile == null) {
             logger.error("No .ipa file found, please configure modules.ios.wda-ipa-dir");
             return new int[]{0, 0};
         }
 
-        // MD5 对比：IPA 未变且设备已安装则跳过安装
-        File md5Store = new File(wdaIpaDir + File.separator + "wda-installed.md5");
+        // MD5 对比：IPA 未变且设备已安装则跳过安装（md5 缓存存于 IPA 所在目录）
+        File md5Store = new File(ipaFile.getParent(), "wda-installed.md5");
         String currentMd5 = computeMd5(ipaFile);
         String lastMd5 = "";
         if (md5Store.exists()) {
