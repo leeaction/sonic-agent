@@ -56,6 +56,7 @@ import java.io.File;
 import java.io.IOException;
 import java.net.Socket;
 import java.util.Calendar;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -71,6 +72,8 @@ public class AndroidWSServer implements IAndroidWSServer {
     private int port;
     @Autowired
     private AgentManagerTool agentManagerTool;
+
+    private static final ConcurrentHashMap<String, Object> openDriverLocks = new ConcurrentHashMap<>();
 
     @OnOpen
     public void onOpen(Session session, @PathParam("key") String secretKey,
@@ -449,18 +452,24 @@ public class AndroidWSServer implements IAndroidWSServer {
     }
 
     private void openDriver(IDevice iDevice, Session session) {
-        synchronized (session) {
-            AndroidStepHandler androidStepHandler = new AndroidStepHandler();
-            androidStepHandler.setTestMode(0, 0, iDevice.getSerialNumber(), DeviceStatus.DEBUGGING, session.getUserProperties().get("id").toString());
-            JSONObject result = new JSONObject();
-            AndroidDeviceThreadPool.cachedThreadPool.execute(() -> {
+        Object deviceLock = openDriverLocks.computeIfAbsent(iDevice.getSerialNumber(), k -> new Object());
+        AndroidStepHandler androidStepHandler = new AndroidStepHandler();
+        androidStepHandler.setTestMode(0, 0, iDevice.getSerialNumber(), DeviceStatus.DEBUGGING, session.getUserProperties().get("id").toString());
+        JSONObject result = new JSONObject();
+        AndroidDeviceThreadPool.cachedThreadPool.execute(() -> {
+            synchronized (deviceLock) {
                 try {
-                    AndroidDeviceLocalStatus.startDebug(iDevice.getSerialNumber());
-                    int port = AndroidDeviceBridgeTool.startUiaServer(iDevice);
-                    androidStepHandler.startAndroidDriver(iDevice, port);
-                    result.put("status", "success");
-                    result.put("port", port);
-                    HandlerMap.getAndroidMap().put(iDevice.getSerialNumber(), androidStepHandler);
+                    AndroidStepHandler current = HandlerMap.getAndroidMap().get(iDevice.getSerialNumber());
+                    if (current != null && current.getAndroidDriver() != null) {
+                        result.put("status", "success");
+                    } else {
+                        AndroidDeviceLocalStatus.startDebug(iDevice.getSerialNumber());
+                        int port = AndroidDeviceBridgeTool.startUiaServer(iDevice);
+                        androidStepHandler.startAndroidDriver(iDevice, port);
+                        result.put("status", "success");
+                        result.put("port", port);
+                        HandlerMap.getAndroidMap().put(iDevice.getSerialNumber(), androidStepHandler);
+                    }
                 } catch (Exception e) {
                     log.error(e.getMessage());
                     result.put("status", "error");
@@ -469,8 +478,8 @@ public class AndroidWSServer implements IAndroidWSServer {
                     result.put("msg", "openDriver");
                     BytesTool.sendText(session, result.toJSONString());
                 }
-            });
-        }
+            }
+        });
     }
 
     private void exit(Session session) {
