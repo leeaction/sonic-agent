@@ -72,8 +72,8 @@ public class ScrcpyServerUtil {
                 break;
             }
         }
-        // 启动输入流
-        ScrcpyInputSocketThread scrcpyInputSocketThread = new ScrcpyInputSocketThread(iDevice, new LinkedBlockingQueue<>(), scrcpyThread, session);
+        // 启动输入流（有界队列，防止生产速度超过 WebSocket 发送速度时无限积压帧数据）
+        ScrcpyInputSocketThread scrcpyInputSocketThread = new ScrcpyInputSocketThread(iDevice, new LinkedBlockingQueue<>(100), scrcpyThread, session);
         // 启动输出流
         ScrcpyOutputSocketThread scrcpyOutputSocketThread = new ScrcpyOutputSocketThread(scrcpyInputSocketThread, session);
         TaskManager.startChildThread(key, scrcpyInputSocketThread, scrcpyOutputSocketThread);

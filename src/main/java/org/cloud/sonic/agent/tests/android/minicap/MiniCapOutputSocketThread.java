@@ -193,7 +193,11 @@ public class MiniCapOutputSocketThread extends Thread {
                                 if (count % 4 == 0) {
                                     count = 0;
                                     oldBytes = finalBytes;
-                                    BytesTool.sendByte(session, finalBytes);
+                                    // 队列积压超过 2000 个 1KB 块（约 2MB）时跳过发送，
+                                    // 让消费线程快速追上生产线程，防止内存无限增长
+                                    if (dataQueue.size() <= 2000) {
+                                        BytesTool.sendByte(session, finalBytes);
+                                    }
                                 }
                             }
                         }

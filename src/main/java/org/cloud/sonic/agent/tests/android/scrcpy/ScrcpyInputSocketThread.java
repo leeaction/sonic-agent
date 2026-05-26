@@ -121,7 +121,7 @@ public class ScrcpyInputSocketThread extends Thread {
                             naLuIndex = i;
                             byte[] naluBuffer = new byte[naLuIndex];
                             System.arraycopy(buffer, 0, naluBuffer, 0, naLuIndex);
-                            dataQueue.add(naluBuffer);
+                            dataQueue.offer(naluBuffer); // 队列满时丢弃旧帧，避免内存无限增长
                             bufferLength -= naLuIndex;
                             System.arraycopy(buffer, naLuIndex, buffer, 0, bufferLength);
                             i = 5;
